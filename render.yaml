@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: market-growth-monitor
+    env: docker
+    plan: free
+    repo: https://github.com/<your-org-or-user>/<your-repo>   # <- replace after creating repo
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    autoDeploy: true
+    # optional health check path
+    healthCheckPath: /
+    # expose port 8050 (app.py uses 0.0.0.0:8050)
