@@ -1,7 +1,7 @@
-pandas
-dash
-plotly
-dash-bootstrap-components
-google-cloud-bigquery
-flask-basicauth
-gunicorn
+dash==3.7.1
+dash-bootstrap-components==1.4.1
+pandas==2.1.0
+plotly==6.0.0
+google-cloud-bigquery==3.10.0
+flask==2.4.0
+Flask-BasicAuth==0.2.0
