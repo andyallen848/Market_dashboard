@@ -1,4 +1,4 @@
-# app.py – Render-kompatibel, Dash 3.x
+# app.py – Render-kompatibel, Dash 3.x, BigQuery Status
 import os
 from datetime import datetime
 from pathlib import Path
@@ -114,6 +114,9 @@ def make_kpi_card(title, value, subtitle=None):
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row([dbc.Col(html.H2("Market Growth Monitor"), width=8), dbc.Col(html.Div(id='clock'), width=4, style={'textAlign':'right'})]),
     dbc.Row([
+        dbc.Col(html.Div(id='bq-status'), width=12)  # NEU: BigQuery Zeilenstatus
+    ]),
+    dbc.Row([
         dbc.Col([html.Label("Sektor auswählen"),
                  dcc.Dropdown(
                      id='sector-dropdown',
@@ -139,6 +142,7 @@ app.layout = dbc.Container(fluid=True, children=[
     Output('alerts-table','figure'),
     Output('news-table','figure'),
     Output('clock','children'),
+    Output('bq-status','children'),  # NEU
     Input('sector-dropdown','value'),
     Input('refresh-button','n_clicks'),
     Input('auto-refresh','n_intervals')
@@ -149,9 +153,15 @@ def update(selected_sector, n_clicks, n_intervals):
     if trigger and 'refresh-button' in trigger:
         df, df_news, df_alerts = load_data()
 
+    # BigQuery Zeilen-Status
+    if hasattr(df, 'shape'):
+        bq_info = f"BigQuery Zeilen: {df.shape[0]}"
+    else:
+        bq_info = "Keine BigQuery-Daten"
+
     if df.empty:
         empty = px.scatter(title="Keine Daten")
-        return empty, html.Div("Keine Daten"), empty, empty, empty, empty, empty, ""
+        return empty, html.Div("Keine Daten"), empty, empty, empty, empty, empty, "", bq_info
 
     sel_df = df[df['sector']==selected_sector] if selected_sector else df.copy()
     sector_scores = df.groupby('sector')['momentum_score'].mean().reset_index().sort_values('momentum_score', ascending=False)
@@ -185,7 +195,7 @@ def update(selected_sector, n_clicks, n_intervals):
         news_fig = px.scatter(title="Keine News/Feed")
 
     clock = f"Letzte Aktualisierung: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
-    return heat_fig, kpis, price_trend, sentiment_trend, scatter, alerts_fig, news_fig, clock
+    return heat_fig, kpis, price_trend, sentiment_trend, scatter, alerts_fig, news_fig, clock, bq_info
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
