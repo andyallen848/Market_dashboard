@@ -1,0 +1,7 @@
+pandas
+dash
+plotly
+dash-bootstrap-components
+google-cloud-bigquery
+flask-basicauth
+gunicorn
