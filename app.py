@@ -1,4 +1,4 @@
-# app.py – robust, Render-kompatibel, ohne IndexError
+# app.py – Render-kompatibel, Dash 3.x
 import os
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +12,7 @@ import plotly.express as px
 from flask import Flask
 from flask_basicauth import BasicAuth
 
-# --- Configuration via ENV ---
+# --- Config ---
 BQ_PROJECT = os.environ.get("BQ_PROJECT", "market-growth-monitor")
 BQ_VIEW = os.environ.get("BQ_VIEW", "market_data.market_dashboard_view")
 SERVICE_KEY_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
@@ -31,7 +31,7 @@ basic_auth = BasicAuth(server)
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Market Growth Monitor"
 
-# --- Load data ---
+# --- Load Data ---
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
 def load_from_csvs():
@@ -64,7 +64,7 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
     else:
         df = df_metrics.copy()
 
-    # Fallbacks für fehlende Spalten
+    # Fallbacks
     if 'sector' not in df.columns:
         df['sector'] = 'Unknown'
     for col in ['price_return_7d','volume_change','sentiment_score']:
@@ -105,7 +105,6 @@ def load_data():
     return df, df_news, df_alerts
 
 df, df_news, df_alerts = load_data()
-
 SECTORS = sorted(df['sector'].dropna().unique().tolist()) if not df.empty else ["Unknown"]
 
 # --- Layout ---
@@ -190,4 +189,5 @@ def update(selected_sector, n_clicks, n_intervals):
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
-    app.run_server(host='0.0.0.0', port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
+
