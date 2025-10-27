@@ -1,4 +1,4 @@
-# app.py
+# app.py (komplett, bereinigt, robust)
 import os
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +14,8 @@ from flask_basicauth import BasicAuth
 
 # --- Configuration via ENV ---
 BQ_PROJECT = os.environ.get("BQ_PROJECT", "market-growth-monitor")
-BQ_VIEW = os.environ.get("BQ_VIEW", "market_data.market_dashboard_view")  # dataset.view
-SERVICE_KEY_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/market-growth-monitor.json")
+BQ_VIEW = os.environ.get("BQ_VIEW", "market_data.market_dashboard_view")
+SERVICE_KEY_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/market-growth-monitor-c20a3876d9c9.json")
 LOGIN_USER = os.environ.get("LOGIN_USER", "Allen")
 LOGIN_PASS = os.environ.get("LOGIN_PASS", "Chester01!")
 UPDATE_HOUR_UTC = int(os.environ.get("UPDATE_HOUR_UTC", "8"))
@@ -45,7 +45,7 @@ def load_from_bigquery():
     df = client.query(query).to_dataframe()
     return df
 
-# Optional CSV fallback (if BigQuery fails)
+# Optional CSV fallback
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 def load_from_csvs():
     try:
@@ -66,6 +66,7 @@ def load_from_csvs():
         ar = pd.DataFrame()
     return dm, sd, nf, ar
 
+# Prepare data
 def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
     if not df_metrics.empty and not df_sectors.empty:
         df = df_metrics.merge(df_sectors, on=["date","sector"], how="left")
@@ -73,10 +74,17 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
         df = df_metrics.copy()
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date']).dt.date
-    df['price_return_7d'] = pd.to_numeric(df.get('price_return_7d',0), errors='coerce').fillna(0)
-    df['volume_change'] = pd.to_numeric(df.get('volume_change',0), errors='coerce').fillna(0)
-    df['sentiment_score'] = pd.to_numeric(df.get('sentiment_score',0), errors='coerce').fillna(0)
+
+    # Convert numeric columns safely
+    for col in ['price_return_7d', 'volume_change', 'sentiment_score']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        else:
+            df[col] = pd.Series([0]*len(df))
+
     df['momentum_score'] = (df['price_return_7d'] + df['sentiment_score'] + df['volume_change'])/3.0
+
+    # Sentiment category
     def cat_sent(x):
         try:
             x = float(x)
@@ -86,6 +94,8 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
         if x <= -0.3: return "Negativ"
         return "Neutral"
     df['sentiment_category'] = df['sentiment_score'].apply(cat_sent)
+
+    # Alerts
     df['capex_spike'] = df.apply(lambda r: True if (r.get('metric_name')=='CapEx_Change_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>10) else False, axis=1)
     df['earnings_beat'] = df.apply(lambda r: True if (r.get('metric_name')=='Earnings_Beat_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>5) else False, axis=1)
     df['negative_sentiment'] = df['sentiment_score'] < -0.4
@@ -95,13 +105,17 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
 # initial load
 def load_data():
     try:
-        df_metrics, df_sectors, df_news, df_alerts = load_from_bigquery()
+        df_metrics = load_from_bigquery()
+        df_sectors = pd.DataFrame()
+        df_news = pd.DataFrame()
+        df_alerts = pd.DataFrame()
     except Exception as e:
         print("BigQuery load failed, falling back to CSVs:", e)
         df_metrics, df_sectors, df_news, df_alerts = load_from_csvs()
     df, df_news, df_alerts = prepare_data(df_metrics, df_sectors, df_news, df_alerts)
     return df, df_news, df_alerts
 
+# Load initial data
 df, df_news, df_alerts = load_data()
 SECTORS = sorted(df['sector'].dropna().unique().tolist()) if not df.empty else ["AI","Renewables","Semiconductors","Biotech","Cybersecurity"]
 
@@ -117,7 +131,7 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row([dbc.Col(dcc.Graph(id='heatmap-fig'), width=6), dbc.Col(html.Div(id='kpi-cards'), width=6)]),
     dbc.Row([dbc.Col(dcc.Graph(id='price-trend'), width=4), dbc.Col(dcc.Graph(id='sentiment-trend'), width=4), dbc.Col(dcc.Graph(id='scatter-fig'), width=4)]),
     dbc.Row([dbc.Col(dcc.Graph(id='alerts-table'), width=6), dbc.Col(dcc.Graph(id='news-table'), width=6)]),
-    dcc.Interval(id='auto-refresh', interval=60*60*1000, n_intervals=0)  # hourly UI refresh
+    dcc.Interval(id='auto-refresh', interval=60*60*1000, n_intervals=0)
 ])
 
 # Callbacks
