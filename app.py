@@ -1,4 +1,4 @@
-# app.py (Render-kompatibel, final)
+# app.py – robust, Render-kompatibel, ohne IndexError
 import os
 from datetime import datetime
 from pathlib import Path
@@ -15,15 +15,12 @@ from flask_basicauth import BasicAuth
 # --- Configuration via ENV ---
 BQ_PROJECT = os.environ.get("BQ_PROJECT", "market-growth-monitor")
 BQ_VIEW = os.environ.get("BQ_VIEW", "market_data.market_dashboard_view")
-SERVICE_KEY_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/market-growth-monitor-c20a3876d9c9.json")
+SERVICE_KEY_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 LOGIN_USER = os.environ.get("LOGIN_USER", "Allen")
 LOGIN_PASS = os.environ.get("LOGIN_PASS", "Chester01!")
 UPDATE_HOUR_UTC = int(os.environ.get("UPDATE_HOUR_UTC", "8"))
 
-# Set GOOGLE_APPLICATION_CREDENTIALS for google client
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = SERVICE_KEY_PATH
-
-# Flask + Basic Auth (wrap Dash)
+# Flask + Basic Auth
 server = Flask(__name__)
 server.config['BASIC_AUTH_USERNAME'] = LOGIN_USER
 server.config['BASIC_AUTH_PASSWORD'] = LOGIN_PASS
@@ -34,19 +31,9 @@ basic_auth = BasicAuth(server)
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Market Growth Monitor"
 
-# Load data from BigQuery
-def load_from_bigquery():
-    client = bigquery.Client(project=BQ_PROJECT)
-    query = f"""
-    SELECT date, sector, ticker, price_return_7d, volume_change, sentiment_score,
-           metric_name, metric_value
-    FROM `{BQ_PROJECT}.{BQ_VIEW}`
-    """
-    df = client.query(query).to_dataframe()
-    return df
-
-# Optional CSV fallback
+# --- Load data ---
 DATA_DIR = os.environ.get("DATA_DIR", ".")
+
 def load_from_csvs():
     def safe_read_csv(filename, parse_dates=None):
         try:
@@ -59,14 +46,25 @@ def load_from_csvs():
     ar = safe_read_csv("alert_rules.csv")
     return dm, sd, nf, ar
 
-# Prepare data
+def load_from_bigquery():
+    if not SERVICE_KEY_PATH or not os.path.exists(SERVICE_KEY_PATH):
+        raise FileNotFoundError(f"Service key not found: {SERVICE_KEY_PATH}")
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = SERVICE_KEY_PATH
+    client = bigquery.Client(project=BQ_PROJECT)
+    query = f"""
+    SELECT date, sector, ticker, price_return_7d, volume_change, sentiment_score,
+           metric_name, metric_value
+    FROM `{BQ_PROJECT}.{BQ_VIEW}`
+    """
+    return client.query(query).to_dataframe()
+
 def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
     if not df_metrics.empty and not df_sectors.empty:
         df = df_metrics.merge(df_sectors, on=["date","sector"], how="left")
     else:
         df = df_metrics.copy()
 
-    # --- Fallback für fehlende Spalten ---
+    # Fallbacks für fehlende Spalten
     if 'sector' not in df.columns:
         df['sector'] = 'Unknown'
     for col in ['price_return_7d','volume_change','sentiment_score']:
@@ -78,28 +76,22 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date']).dt.date
 
-    # Momentum Score
     df['momentum_score'] = (df['price_return_7d'] + df['sentiment_score'] + df['volume_change'])/3.0
 
-    # Sentiment Category
     def cat_sent(x):
-        try:
-            x = float(x)
-        except:
-            return "Neutral"
+        try: x = float(x)
+        except: return "Neutral"
         if x >= 0.3: return "Positiv"
         if x <= -0.3: return "Negativ"
         return "Neutral"
     df['sentiment_category'] = df['sentiment_score'].apply(cat_sent)
 
-    # Alerts
     df['capex_spike'] = df.apply(lambda r: True if (r.get('metric_name')=='CapEx_Change_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>10) else False, axis=1)
     df['earnings_beat'] = df.apply(lambda r: True if (r.get('metric_name')=='Earnings_Beat_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>5) else False, axis=1)
     df['negative_sentiment'] = df['sentiment_score'] < -0.4
 
     return df, df_news, df_alerts
 
-# Initial load
 def load_data():
     try:
         df_metrics = load_from_bigquery()
@@ -113,24 +105,32 @@ def load_data():
     return df, df_news, df_alerts
 
 df, df_news, df_alerts = load_data()
-SECTORS = sorted(df['sector'].dropna().unique().tolist()) if 'sector' in df.columns else ["Unknown"]
 
-# Layout
+SECTORS = sorted(df['sector'].dropna().unique().tolist()) if not df.empty else ["Unknown"]
+
+# --- Layout ---
 def make_kpi_card(title, value, subtitle=None):
     return dbc.Card(dbc.CardBody([html.H6(title), html.H3(value), html.Small(subtitle or '')]), className='mb-2')
 
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row([dbc.Col(html.H2("Market Growth Monitor"), width=8), dbc.Col(html.Div(id='clock'), width=4, style={'textAlign':'right'})]),
-    dbc.Row([dbc.Col([html.Label("Sektor auswählen"), dcc.Dropdown(id='sector-dropdown', options=[{'label':s,'value':s} for s in SECTORS], value=SECTORS[0], clearable=False)], width=4),
-             dbc.Col(dbc.Button("Daten neu laden", id='refresh-button', color='primary'), width=4),
-             dbc.Col(html.Div(id='status'), width=4)]),
+    dbc.Row([
+        dbc.Col([html.Label("Sektor auswählen"),
+                 dcc.Dropdown(
+                     id='sector-dropdown',
+                     options=[{'label':s,'value':s} for s in SECTORS],
+                     value=SECTORS[0] if SECTORS else None,
+                     clearable=False
+                 )], width=4),
+        dbc.Col(dbc.Button("Daten neu laden", id='refresh-button', color='primary'), width=4),
+        dbc.Col(html.Div(id='status'), width=4)
+    ]),
     dbc.Row([dbc.Col(dcc.Graph(id='heatmap-fig'), width=6), dbc.Col(html.Div(id='kpi-cards'), width=6)]),
     dbc.Row([dbc.Col(dcc.Graph(id='price-trend'), width=4), dbc.Col(dcc.Graph(id='sentiment-trend'), width=4), dbc.Col(dcc.Graph(id='scatter-fig'), width=4)]),
     dbc.Row([dbc.Col(dcc.Graph(id='alerts-table'), width=6), dbc.Col(dcc.Graph(id='news-table'), width=6)]),
     dcc.Interval(id='auto-refresh', interval=60*60*1000, n_intervals=0)
 ])
 
-# Callbacks
 @app.callback(
     Output('heatmap-fig','figure'),
     Output('kpi-cards','children'),
@@ -162,9 +162,11 @@ def update(selected_sector, n_clicks, n_intervals):
     avg_sent = sel_df['sentiment_score'].mean() if not sel_df.empty else 0
     capex = sel_df[sel_df.get('metric_name')=='CapEx_Change_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
     earnings = sel_df[sel_df.get('metric_name')=='Earnings_Beat_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
-    kpis = dbc.Row([dbc.Col(make_kpi_card("Durchschnitt Sentiment", f"{avg_sent:.2f}", f"Sektor: {selected_sector}")),
-                    dbc.Col(make_kpi_card("CapEx (avg)", f"{capex:.2f}" if capex is not None and not pd.isna(capex) else "n/a")),
-                    dbc.Col(make_kpi_card("Earnings Beat (avg)", f"{earnings:.2f}" if earnings is not None and not pd.isna(earnings) else "n/a"))])
+    kpis = dbc.Row([
+        dbc.Col(make_kpi_card("Durchschnitt Sentiment", f"{avg_sent:.2f}", f"Sektor: {selected_sector}")),
+        dbc.Col(make_kpi_card("CapEx (avg)", f"{capex:.2f}" if capex is not None and not pd.isna(capex) else "n/a")),
+        dbc.Col(make_kpi_card("Earnings Beat (avg)", f"{earnings:.2f}" if earnings is not None and not pd.isna(earnings) else "n/a"))
+    ])
 
     price_trend = px.line(sel_df.sort_values('date'), x='date', y='price_return_7d', markers=True, title='Preis Trend (7d Return)')
     sentiment_trend = px.area(sel_df.sort_values('date'), x='date', y='sentiment_score', title='Sentiment Trend')
@@ -177,7 +179,7 @@ def update(selected_sector, n_clicks, n_intervals):
         alerts_plot = alerts_df[['date','ticker','capex_spike','earnings_beat','negative_sentiment','metric_name','metric_value']].copy()
         alerts_fig = px.table(alerts_plot.sort_values('date', ascending=False))
 
-    if not df_news.empty:
+    if not df_news.empty and 'sector' in df_news.columns:
         news_plot = df_news[df_news['sector']==selected_sector][['date','headline','sentiment_score','source']].sort_values('date', ascending=False)
         news_fig = px.table(news_plot)
     else:
