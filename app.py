@@ -1,4 +1,4 @@
-# app.py (komplett, bereinigt, robust)
+# app.py (robust gegen fehlende Spalten)
 import os
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +34,7 @@ basic_auth = BasicAuth(server)
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
 app.title = "Market Growth Monitor"
 
-# Utility: load data from BigQuery
+# Load data from BigQuery
 def load_from_bigquery():
     client = bigquery.Client(project=BQ_PROJECT)
     query = f"""
@@ -48,22 +48,15 @@ def load_from_bigquery():
 # Optional CSV fallback
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 def load_from_csvs():
-    try:
-        dm = pd.read_csv(Path(DATA_DIR) / "daily_metrics.csv", parse_dates=["date"])
-    except Exception:
-        dm = pd.DataFrame()
-    try:
-        sd = pd.read_csv(Path(DATA_DIR) / "sector_details.csv", parse_dates=["date"])
-    except Exception:
-        sd = pd.DataFrame()
-    try:
-        nf = pd.read_csv(Path(DATA_DIR) / "news_feed.csv", parse_dates=["date"])
-    except Exception:
-        nf = pd.DataFrame()
-    try:
-        ar = pd.read_csv(Path(DATA_DIR) / "alert_rules.csv")
-    except Exception:
-        ar = pd.DataFrame()
+    def safe_read_csv(filename, parse_dates=None):
+        try:
+            return pd.read_csv(Path(DATA_DIR) / filename, parse_dates=parse_dates)
+        except Exception:
+            return pd.DataFrame()
+    dm = safe_read_csv("daily_metrics.csv", parse_dates=["date"])
+    sd = safe_read_csv("sector_details.csv", parse_dates=["date"])
+    nf = safe_read_csv("news_feed.csv", parse_dates=["date"])
+    ar = safe_read_csv("alert_rules.csv")
     return dm, sd, nf, ar
 
 # Prepare data
@@ -72,19 +65,23 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
         df = df_metrics.merge(df_sectors, on=["date","sector"], how="left")
     else:
         df = df_metrics.copy()
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date']).dt.date
 
-    # Convert numeric columns safely
-    for col in ['price_return_7d', 'volume_change', 'sentiment_score']:
+    # --- Fallback für fehlende Spalten ---
+    if 'sector' not in df.columns:
+        df['sector'] = 'Unknown'
+    for col in ['price_return_7d','volume_change','sentiment_score']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         else:
             df[col] = pd.Series([0]*len(df))
 
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date']).dt.date
+
+    # Momentum Score
     df['momentum_score'] = (df['price_return_7d'] + df['sentiment_score'] + df['volume_change'])/3.0
 
-    # Sentiment category
+    # Sentiment Category
     def cat_sent(x):
         try:
             x = float(x)
@@ -99,10 +96,10 @@ def prepare_data(df_metrics, df_sectors, df_news, df_alerts):
     df['capex_spike'] = df.apply(lambda r: True if (r.get('metric_name')=='CapEx_Change_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>10) else False, axis=1)
     df['earnings_beat'] = df.apply(lambda r: True if (r.get('metric_name')=='Earnings_Beat_Pct' and pd.to_numeric(r.get('metric_value',0), errors='coerce')>5) else False, axis=1)
     df['negative_sentiment'] = df['sentiment_score'] < -0.4
-    df['sector'] = df['sector'].fillna('Unknown')
+
     return df, df_news, df_alerts
 
-# initial load
+# Initial load
 def load_data():
     try:
         df_metrics = load_from_bigquery()
@@ -115,11 +112,10 @@ def load_data():
     df, df_news, df_alerts = prepare_data(df_metrics, df_sectors, df_news, df_alerts)
     return df, df_news, df_alerts
 
-# Load initial data
 df, df_news, df_alerts = load_data()
-SECTORS = sorted(df['sector'].dropna().unique().tolist()) if not df.empty else ["AI","Renewables","Semiconductors","Biotech","Cybersecurity"]
+SECTORS = sorted(df['sector'].dropna().unique().tolist()) if 'sector' in df.columns else ["Unknown"]
 
-# App layout
+# Layout
 def make_kpi_card(title, value, subtitle=None):
     return dbc.Card(dbc.CardBody([html.H6(title), html.H3(value), html.Small(subtitle or '')]), className='mb-2')
 
@@ -164,8 +160,8 @@ def update(selected_sector, n_clicks, n_intervals):
     heat_fig.update_layout(yaxis_title='Momentum Score', xaxis_title='Sektor')
 
     avg_sent = sel_df['sentiment_score'].mean() if not sel_df.empty else 0
-    capex = sel_df[sel_df['metric_name']=='CapEx_Change_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
-    earnings = sel_df[sel_df['metric_name']=='Earnings_Beat_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
+    capex = sel_df[sel_df.get('metric_name')=='CapEx_Change_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
+    earnings = sel_df[sel_df.get('metric_name')=='Earnings_Beat_Pct']['metric_value'].mean() if 'metric_name' in sel_df.columns else None
     kpis = dbc.Row([dbc.Col(make_kpi_card("Durchschnitt Sentiment", f"{avg_sent:.2f}", f"Sektor: {selected_sector}")),
                     dbc.Col(make_kpi_card("CapEx (avg)", f"{capex:.2f}" if capex is not None and not pd.isna(capex) else "n/a")),
                     dbc.Col(make_kpi_card("Earnings Beat (avg)", f"{earnings:.2f}" if earnings is not None and not pd.isna(earnings) else "n/a"))])
