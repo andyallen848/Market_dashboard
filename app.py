@@ -1,4 +1,4 @@
-# app.py (robust gegen fehlende Spalten)
+# app.py (Render-kompatibel, final)
 import os
 from datetime import datetime
 from pathlib import Path
@@ -188,4 +188,4 @@ def update(selected_sector, n_clicks, n_intervals):
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8050))
-    app.run_server(host='0.0.0.0', port=port)
+    app.run_server(host='0.0.0.0', port=port, debug=False)
