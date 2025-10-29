@@ -9,3 +9,7 @@ Flask-BasicAuth==0.2.0
 gunicorn==21.2.0
 pandas==2.2.3
 numpy==1.26.4
+
+google-cloud-bigquery==3.25.0
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
