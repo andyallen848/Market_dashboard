@@ -381,6 +381,7 @@ def update_dashboard(n_clicks, sector_value, topn_value, lookback_value):
 if __name__ == "__main__":
     # Bind to PORT if defined (Render sets $PORT)
     port = int(os.environ.get("PORT", 10000))
-    app.run_server(host="0.0.0.0", port=port, debug=False)
+   app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
